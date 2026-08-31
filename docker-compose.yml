@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: learntwin-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: learntwin
+      POSTGRES_PASSWORD: learntwin
+      POSTGRES_DB: learntwin
+    ports:
+      - "5432:5432"
+    volumes:
+      - learntwin_pgdata:/var/lib/postgresql/data
+
+volumes:
+  learntwin_pgdata:
