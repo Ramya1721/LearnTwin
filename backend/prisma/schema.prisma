@@ -1,0 +1,411 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  password     String
+  createdAt    DateTime @default(now())
+
+  profile          UserProfile?
+  learningDna      LearningDna?
+  userSkills       UserSkill[]
+  learningPaths    LearningPath[]
+  assessmentAttempts AssessmentAttempt[]
+  activities       LearningActivity[]
+  bottlenecks      Bottleneck[]
+  pathCorrections  PathCorrection[]
+  recommendations  Recommendation[]
+  resourceProgress ResourceProgress[]
+  learningSessions LearningSession[]
+  checkpointProgress CheckpointProgress[]
+}
+
+model UserProfile {
+  id                    String   @id @default(uuid())
+  userId                String   @unique
+  user                  User     @relation(fields: [userId], references: [id])
+  careerGoal            String
+  // Canonical domain/topic derived from careerGoal (e.g. "Machine Learning").
+  // Used to look up / generate the skill graph for this learner's goal.
+  domain                String   @default("")
+  experienceLevel       String
+  availableHoursPerWeek Int
+  preferredLearningStyle String
+  preferredLanguage     String   @default("English")
+  onboarded             Boolean  @default(false)
+  updatedAt             DateTime @updatedAt
+}
+
+model LearningDna {
+  id                        String   @id @default(uuid())
+  userId                    String   @unique
+  user                      User     @relation(fields: [userId], references: [id])
+  learningStyle             String
+  theoryPreference          String
+  practicalPreference       String
+  sessionPreference         String
+  revisionRequirement       String
+  problemSolvingStrength    String
+  consistencyScore          Int      @default(50)
+  contentConsumptionScore   Int      @default(50)
+  applicationRateScore      Int      @default(50)
+  inferredNote              String?
+  updatedAt                 DateTime @updatedAt
+}
+
+model Skill {
+  id          String   @id @default(uuid())
+  name        String
+  domain      String
+  description String
+  difficulty  String
+  // Groups skills/topics into a named module for display + generation
+  // purposes (e.g. "Foundations", "Core Concepts"). Does not require a
+  // separate Module table since a skill only ever belongs to one module
+  // within a given domain.
+  module      String   @default("General")
+  moduleOrder Int      @default(0)
+  // True for skills that were generated dynamically for a freeform learning
+  // goal (as opposed to the original hand-authored demo domains). Purely
+  // informational.
+  generated   Boolean  @default(false)
+
+  prerequisites   SkillDependency[] @relation("SkillToPrereq")
+  dependents      SkillDependency[] @relation("PrereqToSkill")
+  userSkills      UserSkill[]
+  pathItems       LearningPathItem[]
+  assessments     Assessment[]
+  activities      LearningActivity[]
+  resources       LearningResource[]
+
+  @@index([domain])
+}
+
+model SkillDependency {
+  id                 String @id @default(uuid())
+  skillId            String
+  skill              Skill  @relation("SkillToPrereq", fields: [skillId], references: [id])
+  prerequisiteSkillId String
+  prerequisiteSkill  Skill  @relation("PrereqToSkill", fields: [prerequisiteSkillId], references: [id])
+
+  @@unique([skillId, prerequisiteSkillId])
+}
+
+model UserSkill {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id])
+  skillId        String
+  skill          Skill    @relation(fields: [skillId], references: [id])
+  proficiency    Int      @default(0)
+  confidenceScore Int     @default(50)
+  lastPracticed  DateTime?
+  status         String   @default("NOT_STARTED")
+
+  @@unique([userId, skillId])
+}
+
+model LearningPath {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  goal      String
+  status    String   @default("ACTIVE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items       LearningPathItem[]
+  corrections PathCorrection[]
+}
+
+model LearningPathItem {
+  id               String   @id @default(uuid())
+  learningPathId   String
+  learningPath     LearningPath @relation(fields: [learningPathId], references: [id])
+  skillId          String
+  skill            Skill    @relation(fields: [skillId], references: [id])
+  sequence         Int
+  // LOCKED | CURRENT (available) | IN_PROGRESS | COMPLETED | SKIPPED | WEAK | FAILED
+  status           String   @default("LOCKED")
+  recommendedReason String?
+
+  // Real progress tracking (never trust the frontend for these — always
+  // derived/verified server-side from ResourceProgress + AssessmentAttempt).
+  progressPercent  Int       @default(0)
+  startedAt        DateTime?
+  lastAccessedAt   DateTime?
+  completedAt      DateTime?
+
+  sessions LearningSession[]
+  videoCheckpoints VideoCheckpoint[]
+}
+
+model Assessment {
+  id           String   @id @default(uuid())
+  skillId      String
+  skill        Skill    @relation(fields: [skillId], references: [id])
+  title        String
+  difficulty   String
+  languageCode String   @default("en")
+  // Minimum score (0-100) required for this quiz to count toward unlocking
+  // the next topic. Configurable per topic.
+  passingScore Int      @default(70)
+
+  questions Question[]
+  attempts  AssessmentAttempt[]
+}
+
+model Question {
+  id             String   @id @default(uuid())
+  assessmentId   String
+  assessment     Assessment @relation(fields: [assessmentId], references: [id])
+  question       String
+  options        String
+  correctAnswer  String
+  explanation    String
+  // Sub-concept this question tests within the topic (e.g. "Regression" within
+  // "ML Foundations"). Optional — used purely for weak-area detection so the
+  // adaptive layer can recommend a specific review instead of "study more".
+  concept        String?
+}
+
+model AssessmentAttempt {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  assessmentId String
+  assessment   Assessment @relation(fields: [assessmentId], references: [id])
+  score        Int
+  attemptedAt  DateTime @default(now())
+}
+
+model LearningActivity {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  skillId     String?
+  skill       Skill?   @relation(fields: [skillId], references: [id])
+  activityType String
+  duration    Int
+  completedAt DateTime @default(now())
+}
+
+model Bottleneck {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  type        String
+  severity    String
+  description String
+  detectedAt  DateTime @default(now())
+  status      String   @default("ACTIVE")
+}
+
+model PathCorrection {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id])
+  learningPathId String
+  learningPath   LearningPath @relation(fields: [learningPathId], references: [id])
+  reason         String
+  oldPath        String
+  newPath        String
+  createdAt      DateTime @default(now())
+}
+
+// Real learning material attached to a Skill/topic (video, article, etc).
+// Content is either generated (AI or deterministic fallback) or, for
+// videos, a configurable external URL — never scraped or fabricated.
+model LearningResource {
+  id                  String   @id @default(uuid())
+  skillId             String
+  skill               Skill    @relation(fields: [skillId], references: [id])
+  // ARTICLE | VIDEO
+  type                String
+  title               String
+  // Explanation/notes/examples for ARTICLE resources (or a video's
+  // accompanying description). Generated content, never copied from a
+  // scraped source.
+  content             String?
+  // External URL for VIDEO resources only. Null unless a real, configured
+  // URL exists — the app never invents video URLs.
+  videoUrl            String?
+  // YouTube-specific metadata, used to render an embeddable player and to
+  // resolve VideoSegment timestamps against the real video. Populated for
+  // VIDEO resources backed by a YouTube watch URL; null otherwise (e.g. a
+  // direct .mp4 URL, or an ARTICLE resource).
+  youtubeVideoId      String?
+  channel             String?
+  durationSeconds     Int?
+  sourceLanguageCode  String?
+  order               Int      @default(0)
+  // % watch/read progress required before this resource counts as complete.
+  minProgressRequired Int      @default(80)
+  createdAt           DateTime @default(now())
+
+  progress ResourceProgress[]
+  segments VideoSegment[]
+  checkpoints VideoCheckpoint[]
+  learningSessions LearningSession[] @relation("SessionVideoResource")
+
+  @@index([skillId])
+}
+
+// A logical, timestamped chapter within a VIDEO LearningResource (e.g.
+// "Supervised Learning" from 8:30-18:45 of a full-course video). Never
+// downloads or re-encodes the source video — only stores start/end
+// timestamps used to drive the embedded YouTube player and to let a
+// micro-learning session pull in just the segment(s) it needs.
+model VideoSegment {
+  id           String   @id @default(uuid())
+  resourceId   String
+  resource     LearningResource @relation(fields: [resourceId], references: [id])
+  title        String
+  summary      String?
+  startSeconds Int
+  endSeconds   Int
+  order        Int      @default(0)
+
+  @@index([resourceId])
+}
+
+// A time-boxed "I only have N minutes" learning plan generated for a single
+// topic (LearningPathItem), assembled from that topic's existing resources
+// (video segments / reading / quiz) rather than any separate content store.
+// Completing a session is a convenience path through real content — it does
+// NOT itself complete the topic; ResourceProgress/AssessmentAttempt (updated
+// as a side effect of working through the session) remain the only source
+// of truth used by getItemRequirements/complete.
+model LearningSession {
+  id                 String   @id @default(uuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id])
+  learningPathItemId String
+  learningPathItem   LearningPathItem @relation(fields: [learningPathItemId], references: [id])
+  targetMinutes      Int
+  requestedDurationMinutes Int?
+  videoResourceId    String?
+  videoResource      LearningResource? @relation("SessionVideoResource", fields: [videoResourceId], references: [id])
+  startTimeSeconds   Float?
+  targetEndTimeSeconds Float?
+  actualEndTimeSeconds Float?
+  // ACTIVE | COMPLETED | ABANDONED
+  status             String   @default("ACTIVE")
+  createdAt          DateTime @default(now())
+  lastAccessedAt     DateTime @default(now())
+  completedAt        DateTime?
+
+  items SessionItem[]
+
+  @@index([userId, learningPathItemId])
+  @@index([videoResourceId])
+}
+
+model SessionItem {
+  id               String   @id @default(uuid())
+  sessionId        String
+  session          LearningSession @relation(fields: [sessionId], references: [id])
+  order            Int
+  // VIDEO_SEGMENT | RESOURCE | QUIZ
+  kind             String
+  // id of the underlying VideoSegment, LearningResource, or Assessment
+  refId            String
+  title            String
+  estimatedMinutes Int
+  completed        Boolean  @default(false)
+  completedAt      DateTime?
+
+  @@index([sessionId])
+}
+
+// Per-user, per-resource progress. This is the only source of truth for
+// whether a piece of content has actually been consumed — the backend
+// derives topic completion from this, never from a raw frontend flag.
+model ResourceProgress {
+  id             String    @id @default(uuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id])
+  resourceId     String
+  resource       LearningResource @relation(fields: [resourceId], references: [id])
+  progress       Int       @default(0) // 0-100, monotonically increasing
+  percentageWatched Int     @default(0)
+  currentTimeSeconds Float?
+  durationSeconds Int?
+  completed      Boolean   @default(false)
+  startedAt      DateTime?
+  lastAccessedAt DateTime?
+  completedAt    DateTime?
+
+  @@unique([userId, resourceId])
+}
+
+model VideoCheckpoint {
+  id                String   @id @default(uuid())
+  resourceId        String
+  resource         LearningResource @relation(fields: [resourceId], references: [id])
+  learningPathItemId String?
+  learningPathItem  LearningPathItem? @relation(fields: [learningPathItemId], references: [id])
+  timestampSeconds  Int
+  question          String
+  options           String
+  correctAnswer     String
+  explanation       String
+  language          String
+  sourceBasis       String?
+  createdAt         DateTime @default(now())
+
+  progress          CheckpointProgress[]
+
+  @@unique([resourceId, timestampSeconds])
+  @@index([learningPathItemId])
+}
+
+model CheckpointProgress {
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id])
+  checkpointId      String
+  checkpoint        VideoCheckpoint @relation(fields: [checkpointId], references: [id])
+  selectedAnswer    String?
+  answeredCorrectly Boolean  @default(false)
+  completed         Boolean  @default(false)
+  answeredAt        DateTime?
+
+  @@unique([userId, checkpointId])
+  @@index([userId, checkpointId])
+}
+
+model YouTubeSearchCache {
+  id             String   @id @default(uuid())
+  cacheKey       String   @unique
+  query          String
+  languageCode   String
+  level          String
+  objective      String
+  responseJson   String
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+model Recommendation {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  type        String
+  title       String
+  description String
+  reason      String
+  priority    String
+  status      String   @default("OPEN")
+  createdAt   DateTime @default(now())
+}
